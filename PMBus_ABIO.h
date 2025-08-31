@@ -1,12 +1,14 @@
+//#include <cstdint>
 #include <cstdint>
 #include <filesystem>
 #include <stdio.h>
 #include <stddef.h>
-#include <stdint.h>
+//#include <stdint.h>
 #include <stdlib.h>
 #include <Wire.h>
 #include <Adafruit_BusIO_Register.h>
 #include <Adafruit_I2CDevice.h>
+#include "PMBus_Struct.h"
 
 #ifndef PMBus_ABIO_H
 #define PMBus_ABIO_H
@@ -15,23 +17,12 @@
 // NOTE: You must call Serial.being(<baud rate>) in your setup() for this to work
 // #define RPB_1600_DEBUG
 
-/**
- * @brief The maximum number of bytes we could possibly expect to receive from the charger
- */
-#define MAX_RECEIVE_BYTES 12
-
-#define N_EXPONENT_MASK 0xF800 // Bitmask for pulling out the first 5 bytes of the payload (the N exponent value)
-#define MANTISSA_MASK 0x07FF   // Bitmask for pulling out the last 11 bytes of the payload (the Mantissa)
-#define N_EXPONENT_LENGTH 5
-#define MANTISSA_LENGTH 11
-#define N_EXPONENT_SHIFT MANTISSA_LENGTH
-
 #define GOOD 0x01
 #define NOTBEGUNERR 0x02
 #define NOWRITEERR 0x04
 #define NOREADERR 0x08
 #define BADBUFFER 0x10
-
+/* 
 // PMBus v1.1 Capability Bits
 #define CRCCAPABILITY 0x80
 #define BUSCAPABILITY 0x60
@@ -40,102 +31,7 @@
 // PMBus v1.1 Operation bits
 #define OPERATIONIMMOFF 0X00
 #define OPERATIONSOFTOFF 0X40
-#define OPERATIONON 0X80
-#define OPERATIONONOFFMASK 0X
-#define OPERATIONMARGINMASK 0X
-
-struct readings
-{
-    uint16_t v_in;
-    float v_out;
-    float i_out;
-    //uint16_t fan_speed_1;
-    //uint16_t fan_speed_2;
-};
-
-struct mfr_data
-{
-    char id[12];
-    char model[12];
-    char revision[24];
-    char location[3];
-    char date[6];
-    char serial[12];
-};
-
-struct buffer_data
-{
-    uint8_t buffer[MAX_RECEIVE_BYTES];
-    uint8_t bufferLength;
-};
-
-struct capability
-{
-    bool CRC;
-    uint8_t BUS;
-    bool ALT;
-};
-
-struct status
-{
-    uint8_t onOff;
-    uint8_t onOffControl;
-};
-
-struct PMBusStatus
-{
-    // STATUS_BYTE bits (lower 8 bits of STATUS_WORD)
-    uint8_t busy;
-    uint8_t off;
-    uint8_t vout_ov;
-    uint8_t iout_oc;
-    uint8_t vin_uv;
-    uint8_t temperature;
-    uint8_t cml;
-    uint8_t none_of_the_above;
-
-    // Upper 8 bits of STATUS_WORD
-    uint8_t vout;
-    uint8_t iout;
-    uint8_t input;
-    uint8_t mfr_specific;
-    uint8_t power_good_negated;
-    uint8_t fans;
-    uint8_t other;
-    uint8_t unknown;
-};
-
-struct operationByte
-{
-    uint8_t onOff;
-    uint8_t offType;
-    uint8_t marginCall;
-    uint8_t faultAction;
-};
-
-enum SystemConfig
-{
-    SC_NONE,
-    PM_CTRL,
-    OPERATION_INIT,
-    EEP_CONFIG,
-    EEP_OFF
-};
-
-enum OperationFields
-{
-    OF_NONE,
-    ON_OFF,
-    OFF_TYPE,
-    MARGIN_CALL,
-    FAULT_ACTION
-};
-
-enum ON_OFF
-{
-    ON,
-    OFF
-};
+#define OPERATIONON 0X80 */
 
 #ifdef USECHARGER
 struct curve_config
@@ -200,6 +96,16 @@ struct curve_parameters
 #endif
 class PMBus_ABIO
 {
+protected:
+    Adafruit_I2CDevice *i2c_dev;
+    buffer_data *rxbuffer;
+    uint8_t runningClk;
+    mfr_data *data;
+    capability *capa;
+    status *stats;
+    PMBusStatus *internalStatus;
+    operationByte *Operations;
+
 public:
     // Constructor, twi is the 2-wire interface, the clk during and after is to keep compatibility
     // with other devices that might use different frequencies
@@ -244,13 +150,22 @@ public:
     bool setControl(uint8_t val, SystemConfig item);
 
     /**
-     * @brief Write linear value with specified commandID & N
+     * @brief Write 16b linear value with specified commandID & N
      * @details See the PMBus 1.1 Spec for more info on how the linear data format works
      * @param N the exponent
      * @param value the value you want to write (NOT the Y value)
      * @return True on success, false on failure
      */
-    bool writeLinearDataCommand(uint8_t commandID, int8_t N, float value);
+    bool writeLinearSixteenBitDataCommand(uint8_t commandID, int8_t N, float value);
+
+    /**
+     * @brief Write 11b linear value with specified commandID & N
+     * @details See the PMBus 1.1 Spec for more info on how the linear data format works
+     * @param N the exponent
+     * @param value the value you want to write (NOT the Y value)
+     * @return True on success, false on failure
+     */
+    bool writeLinearElevenBitDataCommand(uint8_t commandID, int8_t N, float value);
 
     /**
      * @brief Sends commandID to the charger, and reads the receiveLength byte(s) long response into my_rx_buffer[]
@@ -292,6 +207,8 @@ public:
 
     bool print_status_bits(PMBusStatus *status);
 
+    bool runOperation(operationByte* ops);
+
     bool runOperation(OperationFields opfield, uint8_t bitPosition, uint8_t bitMask, uint8_t value);
 
     float parseOutputCurrent();
@@ -302,16 +219,19 @@ public:
 
     bool setOCFaultLimit(float currentLimit, int8_t N);
 
-private:
-    Adafruit_I2CDevice *i2c_dev;
-    buffer_data *rxbuffer;
-    uint8_t runningClk;
-    mfr_data *data;
-    capability *capa;
-    status *stats;
-    PMBusStatus *internalStatus;
-    operationByte *Operations;
+    bool parseOperation(operationByte* ops);
 
+    bool runArbitraryOp(char *stringin);
+
+    bool parseOnOffConfig(OnOffConfigByte *oocb, uint8_t *reg);
+
+    bool clearLocalBuffer(buffer_data* RXBUFFER);
+
+    void printBinary(buffer_data *value);
+
+    bool writeSyllableLinearDataHelper(uint8_t commandID, int16_t Y);
+
+private:
     #if ARDUINO >= 157
   uint32_t wireClk;    ///< Wire speed for SSD1306 transfers
   uint32_t restoreClk; ///< Wire speed following SSD1306 transfers

@@ -3,9 +3,9 @@
 #include <cmath>
 #include <cstdint>
 #include "PMBus_ABIO.h"
-#include "HEP-1000-commands.h"
+#include "PMBus_commands.h"
 
-#define DEBUG_PRINT
+//#define DEBUG_PRINT
 
 #ifdef DEBUG_PRINT
     #define dprintf(...) Serial.printf(__VA_ARGS__)
@@ -117,11 +117,13 @@ uint8_t PMBus_ABIO::Init(uint8_t i2caddr)
           return NOTBEGUNERR;
     }
 
+    this->runOperation(ON_OFF, 0, 0, 0);
+
 #ifdef RPB_1600_DEBUG
     //dprintf("SDA Pin: %d, SCL Pin: %d\n", SDA, SCL);
     Serial.print(F("<RPB-1600 DEBUG> Init complete!\n"));
 #endif
-    return 0;
+   return 0;
 }
 
 bool PMBus_ABIO::getReadings(readings *data)
@@ -139,7 +141,7 @@ bool PMBus_ABIO::getReadings(readings *data)
         return false;
     }
 
-    data->v_out = parseLinearVoltage(CMD_N_VALUE_READ_VOUT);
+    data->v_out = parseLinearVoltage(-7); // move this function to HEP-1000-X to keep things general
 
     /*if (!readWithCommand(CMD_CODE_READ_IOUT, CMD_LENGTH_READ_IOUT))
     {
@@ -372,7 +374,7 @@ uint8_t PMBus_ABIO::writeTwoBytes(uint8_t commandID, uint8_t *data, uint8_t leng
     return 0xFF;
 }
 
-bool PMBus_ABIO::writeVoutTrim(float trim, int8_t N, float lowerBound = TRIM_LOWER_BOUND, float upperBound = TRIM_UPPER_BOUND)
+bool PMBus_ABIO::writeVoutTrim(float trim, int8_t N, float lowerBound, float upperBound)
 {
     int16_t Y = 0;
     float fY = 0.0;
@@ -406,7 +408,7 @@ bool PMBus_ABIO::writeVoutTrim(float trim, int8_t N, float lowerBound = TRIM_LOW
         dprintf("float-Y is %.4f and int-Y is %d\n", fY, Y);
     }
 
-    dprintf("Using binary logic, the mantissa is %d\n", Y);
+    dprintf("Using binary logic, the mantissa is %04x\n", Y);
 
     txData[0] = Y & 0x00FF;
     txData[1] = Y >> 8;
@@ -423,13 +425,15 @@ bool PMBus_ABIO::writeVoutTrim(float trim, int8_t N, float lowerBound = TRIM_LOW
 
     rx = (rxbuffer->buffer[1] << 8) | (rxbuffer->buffer[0]);
 
-    dprintf("Set vout is now %d, %d was written.\n", rx, Y);
+    dprintf("Set vout is now %d, %d was written.\n", (int16_t)rx, (int16_t)Y);
 
     return true;
 }
 
 // This seems to be only if you're interested in integer values... might deprecate?
-bool PMBus_ABIO::writeLinearDataCommand(uint8_t commandID, int8_t N, float value)
+// Was previously meant for 11-bit linear commands, modified to be 16-bit. The regular 
+// helper function is still around for things that need it.
+bool PMBus_ABIO::writeLinearSixteenBitDataCommand(uint8_t commandID, int8_t N, float value)
 {
     uint16_t Y = 0;
     uint16_t denominator = 0x0001;
@@ -449,24 +453,41 @@ bool PMBus_ABIO::writeLinearDataCommand(uint8_t commandID, int8_t N, float value
         Y = (uint16_t) (value * denominator);
     }
 
-#define RPB_1600_DEBUG
-#ifdef RPB_1600_DEBUG
-    Serial.print(F("<RPB-1600 DEBUG> Y calculation: Value = "));
-    Serial.print(value);
-    Serial.print(F(" Denom = "));
-    Serial.print(denominator);
-    Serial.print(F(" Y = "));
-    Serial.print(Y);
-    Serial.print("\n"); 
-#endif
-#undef RPB_1600_DEBUG
+    dprintf("<RPB-1600 DEBUG> Y calculation: Value = %.02f,  Denom = %d,  Y = %d\n", value, denominator, Y);
+
+    return writeSyllableLinearDataHelper(commandID, Y);
+}
+
+bool PMBus_ABIO::writeLinearElevenBitDataCommand(uint8_t commandID, int8_t N, float value)
+{
+    uint16_t Y = 0;
+    uint16_t denominator = 0x0001;
+    // The Y value is calculated using the following equation
+    // (reference PMBUS spec rev 1.1 section 7.1): Value = Y * 2 ^ N
+    // Y = Value / (2 ^ N)
+    // We'll calculate denominator and do the math based on the polarity of N
+
+    if (N > 0)
+    {
+        denominator <<= N;
+        Y = (uint16_t) (value / denominator);
+    }
+    else if (N < 0)
+    {
+        denominator <<= (-N);
+        Y = (uint16_t) (value * denominator);
+    }
+
+    dprintf("<RPB-1600 DEBUG> Y calculation: Value = %.02f,  Denom = %d,  Y = %d\n", value, denominator, Y);
 
     return writeLinearDataHelper(commandID, N, Y);
 }
 
 bool PMBus_ABIO::setOCFaultLimit(float currentLimit, int8_t N)
 {
-    if (!writeLinearDataCommand(CMD_CODE_IOUT_OC_FAULT_LIMIT, N, currentLimit))
+    dprintf("Setting limit of %.02f with an N value of %d\n", currentLimit, N);
+
+    if (!writeLinearElevenBitDataCommand(CMD_CODE_IOUT_OC_FAULT_LIMIT, N, currentLimit))
     {
         dprintf("ERROR WRITING IN setOCFaultLimit\n");
 
@@ -581,7 +602,7 @@ bool PMBus_ABIO::setControl(uint8_t val, SystemConfig item)
         {
             Serial.println("Switching from analog to digital");
             txbuffer[1] = hibyte;
-            lobyte &= !(SYSTEM_CONFIG_PM_CTRL_MASK << SYSTEM_CONFIG_PM_CTRL);
+            lobyte &= ~(SYSTEM_CONFIG_PM_CTRL_MASK << SYSTEM_CONFIG_PM_CTRL);
             txbuffer[0] = lobyte || 0x01;
             dprintf("Lobyte is now %x\n", txbuffer[1]);
             bytesWritten = writeTwoBytes(CMD_CODE_SYSTEM_CONFIG, txbuffer);
@@ -623,7 +644,7 @@ bool PMBus_ABIO::setControl(uint8_t val, SystemConfig item)
             dprintf("0x%02x\n", tempos);
             temp = temp || tempos;
             dprintf("0x%02x\n", temp);
-            txbuffer[1] = (hibyte & ~(SYSTEM_CONFIG_EEP_OFF_MASK << SYSTEM_CONFIG_EEP_OFF)) || (1 << SYSTEM_CONFIG_EEP_OFF);
+            txbuffer[1] = (hibyte & ~(SYSTEM_CONFIG_EEP_OFF_MASK << SYSTEM_CONFIG_EEP_OFF)) | (1 << SYSTEM_CONFIG_EEP_OFF);
             dprintf("Hibyte is now 0x%02x\n", hibyte);
             //bytesWritten = writeTwoBytes(CMD_CODE_SYSTEM_CONFIG, txbuffer);
             //dprintf("Wrote %d bytes.\n", bytesWritten);
@@ -633,7 +654,7 @@ bool PMBus_ABIO::setControl(uint8_t val, SystemConfig item)
         {
             Serial.println("Enabling EEP writes");
             txbuffer[0] = lobyte;
-            txbuffer[1] = (hibyte & !(SYSTEM_CONFIG_EEP_OFF_MASK << SYSTEM_CONFIG_EEP_OFF)) || (0 << SYSTEM_CONFIG_EEP_OFF);
+            txbuffer[1] = (hibyte & ~(SYSTEM_CONFIG_EEP_OFF_MASK << SYSTEM_CONFIG_EEP_OFF)) | (0 << SYSTEM_CONFIG_EEP_OFF);
             dprintf("Hibyte is now 0x%02x\n", hibyte);
             //bytesWritten = writeTwoBytes(CMD_CODE_SYSTEM_CONFIG, txbuffer);
             //dprintf("Wrote %d bytes.\n", bytesWritten);
@@ -805,21 +826,17 @@ bool PMBus_ABIO::writeLinearDataHelper(uint8_t commandID, int8_t N, int16_t Y)
     // Make sure the N value isn't bigger then 5 bits
     if (abs(N) > 15)
     {
-#ifdef RPB_1600_DEBUG
-        Serial.print(F("<RPB-1600 DEBUG> N value too large! Can't convert to linear format. N = "));
-        Serial.println(N);
+        dprintf("<RPB-1600 DEBUG> N value too large! Can't convert to linear format. N = %d\n", N);
         NL
-#endif
+
         return false;
     }
 
     // Make sure the Y (Mantissa) can fit in 11 bits
     if (abs(Y) > 2047)
     {
-#ifdef RPB_1600_DEBUG
-        Serial.print(F("<RPB-1600 DEBUG> Mantissa (Y) value too large! Can't convert to linear format. Y = "));
-        Serial.println(Y);
-#endif
+        dprintf("<RPB-1600 DEBUG> Mantissa (Y) value too large! Can't convert to linear format. Y = %d\n", Y);
+
         return false;
     }
 
@@ -829,18 +846,38 @@ bool PMBus_ABIO::writeLinearDataHelper(uint8_t commandID, int8_t N, int16_t Y)
     // Note that data[0] is the low byte (sent first) and data[1] is the high byte (sent second)
     uint8_t data[2] = {0x00, 0x00};
 
+    dprintf("Y starting: 0x%04x\n", Y);
+    dprintf("N: 0x%02x (%d)\n", N, N);
+
     // Mask the lowest 8 bits of the mantissa, and put those bits in the low byte of the outgoing data
     data[0] = Y & 0x00FF;
+    dprintf("data[0]: 0x%02x\n", data[0]);
     // Mask the lowest 3 bits of the high byte of the mantissa, and put those bits in the high byte of the outgoing data
     data[1] = (Y & 0x0700) >> 8;
+    dprintf("data[1]: 0x%02x\n", data[1]);
     // Mask the lowest 5 bits of N, and shift them to be the highest 5 bytes of the high byte
-    data[1] = (N & 0x1F) << 3;
-#ifdef RPB_1600_DEBUG
-    Serial.print("<RPB-1600 DEBUG> Attempting to write linear data with N = ");
-    Serial.print(N);
-    Serial.print(" and Mantissa (Y) = ");
-    Serial.println(Y);
-#endif
+    dprintf("N & 0x1F: 0x%02x\n", (N & 0x1F));
+    dprintf("^^ << 3: 0x%02x\n", (N & 0x1F) << 3);
+    data[1] = ((N & 0x1F) << 3) | data[1];
+    dprintf("data[1]: 0x%02x\n", data[1]);
+
+    dprintf("<RPB-1600 DEBUG> Attempting to write linear data with N = %d  and Mantissa (Y) = %d\n", N, Y);
+
+    writeTwoBytes(commandID, data);
+
+    return true;
+}
+
+bool PMBus_ABIO::writeSyllableLinearDataHelper(uint8_t commandID, int16_t Y)
+{
+    uint8_t data[2] = {0x00, 0x00};
+
+    data[0] = Y & 0x00FF;
+    dprintf("data[0] = %02x\n", data[0]);
+
+    data[0] = (Y >> 8) & 0x00FF;
+    dprintf("data[1] = %02x\n", data[1]);
+
     writeTwoBytes(commandID, data);
 
     return true;
@@ -866,24 +903,14 @@ float PMBus_ABIO::parseOutputCurrent()
 {
     uint16_t rawData = rxbuffer->buffer[0] | (rxbuffer->buffer[1] << 8);
 
+    dprintf("RXB1: 0x%02x | RXB0: 0x%02x\n", rxbuffer->buffer[1], rxbuffer->buffer[0]);
+
     // Mask & shift out the "N" and "mantissa" values and convert them from 2s complement
     int16_t rawN = (rawData & N_EXPONENT_MASK) >> N_EXPONENT_SHIFT;
     int16_t N = UpscaleTwosComplement(rawN, N_EXPONENT_LENGTH);
     int16_t rawMantissa = (rawData & MANTISSA_MASK);
     
-#ifdef RPB_1600_DEBUG
-    Serial.print(F("<RPB-1600 DEBUG> Raw Data: 0x"));
-    Serial.println(rawData, HEX);
-
-    Serial.print(F("<RPB-1600 DEBUG> Raw N: 0x"));
-    Serial.println(rawN, HEX);
-
-    Serial.print(F("<RPB-1600 DEBUG> N: "));
-    Serial.println(N);
-
-    Serial.print(F("<RPB-1600 DEBUG> Raw Mantissa : 0x"));
-    Serial.println(rawMantissa, HEX);
-#endif
+    dprintf("<RPB-1600 DEBUG> Raw Data: 0x%04x | Raw N: 0x%02x (%d) | Raw Mantissa: 0x%04x\n", rawData, rawN, N, rawMantissa);
 
     float result = rawMantissa * std::pow(2.0, N);
 
@@ -1025,6 +1052,48 @@ int16_t PMBus_ABIO::UpscaleTwosComplement(int16_t value, size_t length)
     }
 }
 
+bool PMBus_ABIO::clearLocalBuffer(buffer_data* RXBUFFER)
+{
+  Serial.println("Clearing buffer for new data");
+  for (int i = 0; i < MAX_RECEIVE_BYTES; i++)
+  {
+    RXBUFFER->buffer[i] = 0;
+  }
+
+  Serial.println("Cleared");
+  RXBUFFER->bufferLength = 0;
+  
+  return true;
+}
+
+void PMBus_ABIO::printBinary(buffer_data *value) 
+{
+
+  uint8_t index = 0;
+  do
+  {
+    Serial.printf("Current index: %d\n", index);
+      Serial.printf("Raw Value: %d\n", value->buffer[index]);
+      Serial.print("Bits: ");
+      for (int i = 7; i >= 0; i--) {
+        Serial.print((value->buffer[index] >> i) & 1);
+        if (i != 0) Serial.print(' ');
+      }
+      Serial.println();
+
+      Serial.print("      ");
+      for (int i = 7; i >= 0; i--) {
+        Serial.print(i);
+        if (i != 0) Serial.print(' ');
+      }
+      Serial.println();
+
+  }
+  while (++index < value->bufferLength);
+  
+  return;
+}
+
 void PMBus_ABIO::clearRXBuffer(void)
 {
     
@@ -1066,11 +1135,6 @@ bool PMBus_ABIO::readFromWrapper(uint8_t len)
 bool PMBus_ABIO::returnBufferData(buffer_data* bufferHandle)
 {
     uint8_t* ptr = rxbuffer->buffer;
-
-    if (bufferHandle->buffer == nullptr)
-    {
-        return false;
-    }
 
     for (int i = 0; i < MAX_RECEIVE_BYTES; i++)
     {
@@ -1220,6 +1284,79 @@ bool PMBus_ABIO::print_status_bits(PMBusStatus *status)
     return true;
 }
 
+bool PMBus_ABIO::runOperation(operationByte* ops)
+{
+    if (!readWithCommand(CMD_CODE_OPERATION, CMD_LENGTH_OPERATION))
+    {
+        return false;
+    }
+
+    uint8_t tempOpBuffer = 0;
+
+    tempOpBuffer = (uint8_t) rxbuffer->buffer[rxbuffer->bufferLength - 1];
+    dprintf("Operation Register: 0x%02x\n", tempOpBuffer);
+
+    ops->faultAction = (tempOpBuffer >> OPERATION_FAULT_ACTION) & OPERATION_FAULT_ACTION_MASK;
+    ops->marginCall = (tempOpBuffer >> OPERATION_MARGIN) & OPERATION_MARGIN_MASK;
+    ops->offType = (tempOpBuffer >> OPERATION_OFF_TYPE) & OPERATION_OFF_TYPE_MASK;
+    ops->onOff = (tempOpBuffer >> OPERATION_ON_OFF) & OPERATION_ON_OFF_MASK;
+
+    dprintf("On_Off is %d\n", ops->onOff);
+    if (ops->onOff == 1)             Serial.println(" PSU is ON");
+    else if (!(ops->onOff))          Serial.println(" PSU is OFF");
+    else                                    Serial.println(" On/off has an invalid value");
+    
+    dprintf("Off_Type is %d\n", ops->offType);
+    if (ops->offType == 1)           Serial.println(" PSU immediately turns off");
+    else if (!(ops->offType))        Serial.println(" PSU soft turns off");
+    else                                    Serial.println(" Off type has an invalid value");
+
+    dprintf("Margin_Call is %d\n", ops->marginCall);
+    if (ops->marginCall == 0)        Serial.println(" No margin checking");
+    else if (ops->marginCall == 1)   Serial.println(" Checks lower margin/under- conditions");
+    else if (ops->marginCall == 2)   Serial.println(" Checks upper margin/over- conditions");
+    else                                    Serial.println(" Margin has an invalid value");
+
+    dprintf("Fault_Action is %d\n", ops->faultAction);
+    if (ops->faultAction == 1)       Serial.println(" Faults are IGNORED if margin called");
+    else if (ops->faultAction == 2)  Serial.println(" Faults are ACTED UPON if margin called");
+    else                                    Serial.println(" Fault action has an invalid value");
+
+    NL
+
+    return true;
+}
+
+bool PMBus_ABIO::parseOperation(operationByte* ops)
+{
+    if (!ops) return false;
+
+    dprintf("On_Off is %d\n", ops->onOff);
+    if (ops->onOff == 1)             dprintf(" PSU is ON");
+    else if (!(ops->onOff))          dprintf(" PSU is OFF");
+    else                                    dprintf(" On/off has an invalid value");
+    
+    dprintf("Off_Type is %d\n", ops->offType);
+    if (ops->offType == 1)           dprintf(" PSU immediately turns off");
+    else if (!(ops->offType))        dprintf(" PSU soft turns off");
+    else                                    dprintf(" Off type has an invalid value");
+
+    dprintf("Margin_Call is %d\n", ops->marginCall);
+    if (ops->marginCall == 0)        dprintf(" No margin checking");
+    else if (ops->marginCall == 1)   dprintf(" Checks lower margin/under- conditions");
+    else if (ops->marginCall == 2)   dprintf(" Checks upper margin/over- conditions");
+    else                                    dprintf(" Margin has an invalid value");
+
+    dprintf("Fault_Action is %d\n", ops->faultAction);
+    if (ops->faultAction == 1)       dprintf(" Faults are IGNORED if margin called");
+    else if (ops->faultAction == 2)  dprintf(" Faults are ACTED UPON if margin called");
+    else                                    dprintf(" Fault action has an invalid value");
+
+    NL
+
+    return true;
+}
+
 bool PMBus_ABIO::runOperation(OperationFields opfield, uint8_t bitPosition, uint8_t bitMask, uint8_t value)
 {
     uint8_t tempOpBuffer = 0;
@@ -1273,13 +1410,13 @@ bool PMBus_ABIO::runOperation(OperationFields opfield, uint8_t bitPosition, uint
             {
                 dprintf("Switching to 0x%02x\n", value);
                 uint8_t maskoff = (OPERATION_ON_OFF_MASK << OPERATION_ON_OFF);
-                //dprintf("Mask is 0x%02x\n", maskoff);
-                maskoff = !(maskoff);
-                //dprintf("notted Mask is 0x%02x\n", maskoff);
+                dprintf("Mask is 0x%02x\n", maskoff);
+                maskoff = ~(maskoff);
+                dprintf("notted Mask is 0x%02x\n", maskoff);
                 txBuilder[0] = (tempOpBuffer & maskoff);
-                //dprintf("Operation buffer is 0x%02x\n", txBuilder[0]);
-                txBuilder[0] = (value << OPERATION_ON_OFF);
-                //dprintf("Operation buffer is 0x%02x\n", txBuilder[0]);
+                dprintf("Operation buffer is 0x%02x\n", txBuilder[0]);
+                txBuilder[0] = (value << OPERATION_ON_OFF) | txBuilder[0];
+                dprintf("Operation buffer is 0x%02x\n", txBuilder[0]);
                 if(!writeTwoBytes(CMD_CODE_OPERATION, txBuilder , 1))
                 {
                     Serial.println("Error writing value");
@@ -1310,6 +1447,66 @@ bool PMBus_ABIO::runOperation(OperationFields opfield, uint8_t bitPosition, uint
     }
     
     return false;
+}
+
+bool PMBus_ABIO::runArbitraryOp(char *stringin)
+{
+    NL
+    NL
+    dprintf("Warning: no guardrails exist in these waters\n");
+    NL
+    dprintf("String entered: %s\n", stringin);
+
+    char* input = stringin;
+
+    // Use strtok to split by space
+    char* token = strtok(input, " ");
+    if (token == nullptr) 
+    {
+        dprintf("No space found in string\n");
+        return false;
+    }
+
+    dprintf("Token is now %s\n", token);
+
+    uint16_t val1 = strtol(token, nullptr, 16);  // base 16
+
+    token = strtok(nullptr, " ");
+    if (token == nullptr) 
+    {
+        dprintf("Only one value detected, assuming read\n");
+        return false;
+    }
+
+    dprintf("Token is now %s\n", token);
+
+    uint16_t val2 = strtol(token, nullptr, 16);  // base 16
+
+    dprintf("Parsed values:\n");
+    dprintf("  First:  0x%X (%d)\n", val1, val1);
+    dprintf("  Second: 0x%X (%d)\n", val2, val2);
+
+    return true;
+}
+
+bool PMBus_ABIO::parseOnOffConfig(OnOffConfigByte *oocb, uint8_t *reg)
+{
+     uint8_t val = *reg;
+
+    bool defaultPower     = (val >> ON_OFF_CONFIG_DEFAULT_POWER)    & ON_OFF_CONFIG_MASK;
+    bool serialEnable     = (val >> ON_OFF_CONFIG_SERIAL)           & ON_OFF_CONFIG_MASK;
+    bool controlPinEnable = (val >> ON_OFF_CONFIG_CONTROL_PIN)      & ON_OFF_CONFIG_MASK;
+    bool controlPolarity  = (val >> ON_OFF_CONFIG_CONTROL_POLARITY) & ON_OFF_CONFIG_MASK;
+    bool controlActionOff = (val >> ON_OFF_CONFIG_CONTROL_ACTION)   & ON_OFF_CONFIG_MASK;
+
+    dprintf("ON_OFF_CONFIG Register (0x%02X):\n", val);
+    dprintf("  Default Power ON     : %s\n", defaultPower     ? "Yes" : "No");
+    dprintf("  Serial Control       : %s\n", serialEnable     ? "Enabled" : "Disabled");
+    dprintf("  CONTROL Pin Enabled  : %s\n", controlPinEnable ? "Yes" : "No");
+    dprintf("  CONTROL Pin Polarity : %s\n", controlPolarity  ? "Active High" : "Active Low");
+    dprintf("  CONTROL Pin Action   : %s\n", controlActionOff ? "Turn OFF when deasserted" : "No action");
+
+    return true;
 }
 
 /*// Eventually move this into its own hep-1000-100 derived class

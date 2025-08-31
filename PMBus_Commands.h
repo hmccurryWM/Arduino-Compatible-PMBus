@@ -1,11 +1,5 @@
-/**
- * This file contains #defines for all of the commands supported by the RPB-1600
- * It also includes data length and N values for decoding/encoding values
- * See the PMBus 1.1 specifications "Linear data" section for more info
- */
-
-#define TRIM_UPPER_BOUND 25.0
-#define TRIM_LOWER_BOUND -50.0
+// This file is supposed to have EVERY command code and length in pmbus, perhaps split over revision.
+// Currently it has a limited number, but should get fleshed out as needed?
 
 // Command Codes
 #define CMD_CODE_OPERATION 0x01
@@ -97,20 +91,4 @@
 #define CMD_LENGTH_SYSTEM_CONFIG 2
 #define CMD_LENGTH_SYSTEM_STATUS 2
 
-// Linear data N values
-#define CMD_N_VALUE_VOUT_MODE -7
-#define CMD_N_VALUE_VOUT_COMMAND -7
-#define CMD_N_VALUE_VOUT_TRIM -7
-#define CMD_N_VALUE_IOUT_OC_FAULT_LIMIT -6
-#define CMD_N_VALUE_READ_VIN -1
-#define CMD_N_VALUE_READ_VOUT -7
-#define CMD_N_VALUE_READ_IOUT -6
-//#define CMD_N_VALUE_READ_FAN_SPEED_1 5
-//#define CMD_N_VALUE_READ_FAN_SPEED_2 5
-#define CMD_N_VALUE_CURVE_CC -6
-#define CMD_N_VALUE_CURVE_CV -7
-#define CMD_N_VALUE_CURVE_FV -7
-#define CMD_N_VALUE_CURVE_TC -6
-#define CMD_N_VALUE_CURVE_CC_TIMEOUT 0
-#define CMD_N_VALUE_CURVE_CV_TIMEOUT 0
-#define CMD_N_VALUE_CURVE_FLOAT_TIMEOUT 0
+
