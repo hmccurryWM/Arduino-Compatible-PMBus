@@ -3,5 +3,5 @@
     "PMBus_ABIO.cpp"
     "PMBus_Support.cpp"
     INCLUDE_DIRS "."
-    REQUIRES Adafruit_BusIO arduino-esp32
+    REQUIRES Adafruit_BusIO arduino-esp32 Timestamps
 )

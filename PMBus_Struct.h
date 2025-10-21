@@ -84,6 +84,24 @@
 // On/Off Config Byte bit mask
 #define ON_OFF_CONFIG_MASK 1
 
+// Charger Definition Macros
+// Curve Config
+// Hi Byte
+#define FVTIMEOUT 2
+#define CVTIMEOUT 1
+#define CCTIMEOUT 0
+// Lo Byte
+#define CURVE_ENABLE 7
+#define CHARGE_STAGES 6
+#define TEMP_COMPENSATION 2
+#define CURVE_SELECTION 0
+// Bit Field Size
+#define CURVE_TIMEOUT_SIZE 1
+#define CURVE_ENABLE_SIZE 1
+#define CHARGE_STAGES_SIZE 1
+#define TEMP_COMP_SIZE 2
+#define CURVE_SEL_SIZE 2
+
 // ON_OFF_CONFIG register bits
 typedef struct
 {
@@ -261,3 +279,66 @@ enum OperationFields
     FAULT_ACTION
 };
 
+#define USECHARGER
+#ifdef USECHARGER
+struct curve_config
+{
+    uint8_t charge_curve_type;
+    uint8_t temp_compensation;
+    uint8_t num_charge_stages;
+    bool cc_timeout_indication_enabled;
+    bool cv_timeout_indication_enabled;
+    bool float_stage_timeout_indication_enabled;
+    bool charge_curve_function_enable;
+};
+
+struct charge_status
+{
+    bool fully_charged;
+    bool in_cc_mode;
+    bool in_cv_mode;
+    bool in_float_mode;
+    // From datasheet:
+    // When EEPROM Charge Parameter Error occurs, the charger stops
+    // charging the battery and the LED indicator turns red. The
+    // charger needs to re-power on to re-start charging the battery.
+    bool EEPROM_error;
+    // From datasheet: When Temperature Compensation Short occurs, the
+    // charger output will shut down and the LED indicator will turn red.
+    // The charger will automatically restart after the Temperature
+    // Compensation Short condition is removed.
+    bool temp_compensation_short_circuit;
+    // From datasheet: When there is no battery detected, the charger
+    // stops charging the battery and the LED indicator turns red. The
+    // charger needs to re-power on to re-start charging the battery
+    bool battery_detected;
+    // From datasheet: When timeout arises in the Constant Current stage,
+    // the charger stops charging the battery and the LED indicator turns
+    // red. The charger needs to re-power on to re-start charging the
+    // battery
+    bool timeout_flag_cc_mode;
+    // From datasheet: When timeout arises in the Constant Voltage stage,
+    // the charger stops charging the battery and the LED indicator turns
+    // red. The charger needs to re-power on to re-start charging the
+    // battery
+    bool timeout_flag_cv_mode;
+    // From datasheet: When timeout arises in the Float stage, the
+    // charger stops charging the battery and the LED indicator turns
+    // green. This charging flow is finished; the charger needs to
+    // re-power on to start charging a different battery
+    bool timeout_flag_float_mode;
+};
+
+struct curve_parameters
+{
+    uint16_t cc;
+    float cv;
+    float floating_voltage;
+    uint16_t taper_current;
+    curve_config config;
+    uint16_t cc_timeout;
+    uint16_t cv_timeout;
+    uint16_t float_timeout;
+    charge_status status;
+};
+#endif

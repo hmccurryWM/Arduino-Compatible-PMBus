@@ -4,13 +4,17 @@
 #include <cstdint>
 #include "PMBus_ABIO.h"
 #include "PMBus_commands.h"
+#include <timestamps.h>
+#include <bitset>
 
-//#define DEBUG_PRINT
+#define DEBUG_PRINT
 
 #ifdef DEBUG_PRINT
     #define dprintf(...) Serial.printf(__VA_ARGS__)
+    #define NL Serial.print(F("\n"));
 #else
     #define dprintf(...)
+    #define NL
 #endif
 
 
@@ -27,7 +31,7 @@
 
 //#define RPB_1600_DEBUG
 
-#define NL Serial.print(F("\n"));
+
 
 
 //----------------------------------------------------------------------
@@ -50,7 +54,7 @@ PMBus_ABIO::~PMBus_ABIO(void)
 {
     if (rxbuffer)
     {
-        Serial.println("rxbuffer exists");
+        tdlogln("rxbuffer exists");
         free(rxbuffer->buffer);
         free(rxbuffer);
         rxbuffer = NULL;
@@ -58,38 +62,60 @@ PMBus_ABIO::~PMBus_ABIO(void)
 
     if (data)
     {
-        Serial.println("mfr data exists");
+        tdlogln("mfr data exists");
         free(data);
         data = NULL;
     }
 
     if (capa)
     {
-        Serial.println("capabilitiy exists");
+        tdlogln("capabilitiy exists");
         free(capa);
         capa = NULL;
     }
 
     if (internalStatus)
     {
-        Serial.println("status exists");
+        tdlogln("status exists");
         free(internalStatus);
         internalStatus = NULL;
     }
 
     if (Operations)
     {
-        Serial.println("Operations exists");
+        tdlogln("Operations exists");
         free(Operations);
         Operations = NULL;
     }
+#ifdef USECHARGER    
+    if (CConfig)
+    {
+        tdlogln("Curve Config exists");
+        free(CConfig);
+        CConfig = NULL;
+    }
+
+    if (CParms)
+    {
+        tdlogln("Curve Parametersexists");
+        free(CParms);
+        CParms = NULL;
+    }
+
+    if (ChgStat)
+    {
+        tdlogln("Charge Status exists");
+        free(ChgStat);
+        ChgStat = NULL;
+    }
+#endif
 }
 
 uint8_t PMBus_ABIO::Init(uint8_t i2caddr)
 {
     pmbus_addr = i2caddr;
 
-    //Serial.println("Before buffer length");
+    //tdlogln("Before buffer length");
 
     rxbuffer = new buffer_data;
     capa = new capability;
@@ -97,9 +123,15 @@ uint8_t PMBus_ABIO::Init(uint8_t i2caddr)
     internalStatus = new PMBusStatus();
     Operations = new operationByte();
 
+#ifdef USECHARGER
+    CConfig = new curve_config();
+    CParms = new curve_parameters();
+    ChgStat = new charge_status();
+#endif
+
     rxbuffer->bufferLength = 0;
 
-    //Serial.println("Set address and buffer length init");
+    //tdlogln("Set address and buffer length init");
 
     for (int i = 0; i < MAX_RECEIVE_BYTES; i++)
     {
@@ -108,7 +140,7 @@ uint8_t PMBus_ABIO::Init(uint8_t i2caddr)
 
     delete (i2c_dev);
 
-    Serial.println("deleted i2c");
+    tdlogln("deleted i2c");
 
     i2c_dev = new Adafruit_I2CDevice(pmbus_addr, &Wire);
 
@@ -170,6 +202,7 @@ bool PMBus_ABIO::getReadings(readings *data)
 */
     return true;
 }
+
 #ifdef USECHARGER
 bool PMBus_ABIO::getChargeStatus(charge_status *status)
 {
@@ -183,78 +216,7 @@ bool PMBus_ABIO::getChargeStatus(charge_status *status)
     return true;
 }
 
-bool PMBus_ABIO::getCurveParams(curve_parameters *params)
-{
-    /* Query the charger for all charge curve related commands, and populate the following items:
-    params->cc;
-    params->cv;
-    params->floating_voltage;
-    params->taper_current;
-    params->config;
-    params->cc_timeout;
-    params->cv_timeout;
-    params->status; */
 
-    if (!readWithCommand(CMD_CODE_CURVE_CC, CMD_LENGTH_CURVE_CC))
-    {
-        return false;
-    }
-
-    params->cc = parseLinearData();
-
-    if (!readWithCommand(CMD_CODE_CURVE_CV, CMD_LENGTH_CURVE_CV))
-    {
-        return false;
-    }
-
-    params->cv = parseLinearVoltage(CMD_N_VALUE_CURVE_CV);
-
-    if (!readWithCommand(CMD_CODE_CURVE_FV, CMD_LENGTH_CURVE_FV))
-    {
-        return false;
-    }
-
-    params->floating_voltage = parseLinearVoltage(CMD_N_VALUE_CURVE_FV);
-
-    if (!readWithCommand(CMD_CODE_CURVE_TC, CMD_LENGTH_CURVE_TC))
-    {
-        return false;
-    }
-
-    params->taper_current = parseLinearData();
-
-    if (!readWithCommand(CMD_CODE_CURVE_CONFIG, CMD_LENGTH_CURVE_CONFIG))
-    {
-        return false;
-    }
-
-    parseCurveConfig(&params->config);
-
-    if (!readWithCommand(CMD_CODE_CURVE_CC_TIMEOUT, CMD_LENGTH_CURVE_CC_TIMEOUT))
-    {
-        return false;
-    }
-
-    params->cc_timeout = parseLinearData();
-
-    if (!readWithCommand(CMD_CODE_CURVE_CV_TIMEOUT, CMD_LENGTH_CURVE_CV_TIMEOUT))
-    {
-        return false;
-    }
-
-    params->cv_timeout = parseLinearData();
-
-    if (!readWithCommand(CMD_CODE_CURVE_FLOAT_TIMEOUT, CMD_LENGTH_CURVE_FLOAT_TIMEOUT))
-    {
-        return false;
-    }
-
-    params->float_timeout = parseLinearData();
-
-    getChargeStatus(&params->status);
-
-    return true;
-}
 #endif
 uint8_t PMBus_ABIO::readWithCommand(uint8_t commandID, uint8_t receiveLength)
 {
@@ -275,7 +237,7 @@ uint8_t PMBus_ABIO::readWithCommand(uint8_t commandID, uint8_t receiveLength)
     // write is needed to add the command to the tx buffer, as its protected in wire.
     #define NEEDWRITE
 #ifdef NEEDWRITE
-    //Serial.println("Setting aio pin high for write");
+    //tdlogln("Setting aio pin high for write");
     //digitalWrite(4, HIGH);
 
     // handle to the real command ID, since we're reading the length is always 1 byte. false 
@@ -285,28 +247,28 @@ uint8_t PMBus_ABIO::readWithCommand(uint8_t commandID, uint8_t receiveLength)
         return NOWRITEERR;
     }
 
-    //Serial.println("Bringing aio pin back low after write");
+    //tdlogln("Bringing aio pin back low after write");
     //digitalWrite(4, LOW);
 
-    //Serial.println("Ending transmission of command id");
+    //tdlogln("Ending transmission of command id");
 #endif
     // Clear out buffer in preparation for new data
     clearRXBuffer();
 
-    //Serial.println("Setting aio pin high for read");
+    //tdlogln("Setting aio pin high for read");
     //digitalWrite(4, HIGH);
 
     // Request bytes from the device
     readFromWrapper(receiveLength);
 
-    //Serial.println("Bringing aio pin back low after read");
+    //tdlogln("Bringing aio pin back low after read");
     //digitalWrite(4, LOW);
     // Count the number of bytes we receive
     uint8_t num_bytes = rxbuffer->bufferLength;
 
 #ifdef RPB_1600_DEBUG
     Serial.print(F("<RPB-1600 DEBUG> Total bytes received: "));
-    Serial.println(num_bytes);
+    tdlogln(num_bytes);
     Serial.print("\n");
 
     Serial.print(F("<RPB-1600 DEBUG> RX Buffer: ["));
@@ -511,12 +473,12 @@ bool PMBus_ABIO::setControl(uint8_t val, SystemConfig item)
 
     uint8_t txbuffer[2] = {0x00, 0x00};
 
-    Serial.println("Setting analog/digital control");
+    tdlogln("Setting analog/digital control");
     int sizeofthing = CMD_LENGTH_SYSTEM_CONFIG;
 
     if (!readWithCommand(CMD_CODE_SYSTEM_CONFIG, CMD_LENGTH_SYSTEM_CONFIG))
     {
-        Serial.println("ERROR");
+        tdlogln("ERROR");
         return false;
     }
 
@@ -532,34 +494,34 @@ bool PMBus_ABIO::setControl(uint8_t val, SystemConfig item)
     PM_CTRL_VAL = (lobyte >> SYSTEM_CONFIG_PM_CTRL) & SYSTEM_CONFIG_PM_CTRL_MASK;
 
     if (EEP_OFF_VAL == 1)
-        Serial.println("Parameters are not saved into the EEPROM (EEP_OFF == 1)");
+        tdlogln("Parameters are not saved into the EEPROM (EEP_OFF == 1)");
     else if (EEP_OFF_VAL == 0)
-        Serial.println("Parameters are to be saved into the EEPROM (EEP_OFF == 0)");
+        tdlogln("Parameters are to be saved into the EEPROM (EEP_OFF == 0)");
     else
         dprintf("ERROR: EEP_OFF is an invalid value: %x\n", EEP_OFF);
 
     if (EEP_CONFIG_VAL == 0)
-        Serial.println("Parameters are saved to EEPROM immediately (EEP_CONFIG = 0)");
+        tdlogln("Parameters are saved to EEPROM immediately (EEP_CONFIG = 0)");
     else if (EEP_CONFIG_VAL == 1)
-        Serial.println("Parameters are saved to EEPROM when unchanged for 1 minute (EEP_CONFIG = 1)");
+        tdlogln("Parameters are saved to EEPROM when unchanged for 1 minute (EEP_CONFIG = 1)");
     else if (EEP_CONFIG_VAL == 2)
-        Serial.println("Parameters are sved to EEPROM when unchanged for 10 minutes (EEP_CONFIG = 2)");
+        tdlogln("Parameters are sved to EEPROM when unchanged for 10 minutes (EEP_CONFIG = 2)");
     else
         dprintf("ERROR: EEP_CONFIG is an invalid value: %x\n", EEP_CONFIG);
     
     if (OPERATION_INIT_VAL == 0)
-        Serial.println("Power supply is off on startup (OPERATION_INIT = 0)");
+        tdlogln("Power supply is off on startup (OPERATION_INIT = 0)");
     else if (OPERATION_INIT_VAL == 1)
-        Serial.println("Power supply is on on startup (OPERATION_INIT = 1)");
+        tdlogln("Power supply is on on startup (OPERATION_INIT = 1)");
     else if (OPERATION_INIT_VAL == 2)
-        Serial.println("Power supply starts with whatever it was last time (OPERATION_INIT = 2)");
+        tdlogln("Power supply starts with whatever it was last time (OPERATION_INIT = 2)");
     else
         dprintf("ERROR: OPERATION_INIT is an invalid value: %x\n", OPERATION_INIT);
 
     if (PM_CTRL_VAL == 1)
-        Serial.println("Power supply is on digital control (PM_CTRL == 1)");
+        tdlogln("Power supply is on digital control (PM_CTRL == 1)");
     else if (PM_CTRL_VAL == 0)
-        Serial.println("Power supply is on analog control (PM_CTRL == 0)");
+        tdlogln("Power supply is on analog control (PM_CTRL == 0)");
     else
         dprintf("ERROR: PM_CTRL is an invalid value: %x\n", PM_CTRL);
 
@@ -570,7 +532,7 @@ bool PMBus_ABIO::setControl(uint8_t val, SystemConfig item)
     {
         if (val != 0 && OPERATION_INIT_VAL == 0)
         {
-            Serial.println("Switching from start off to start on");
+            tdlogln("Switching from start off to start on");
             txbuffer[1] = hibyte;
             lobyte &= !(0x06);
             txbuffer[0] = lobyte || 0x02;
@@ -582,7 +544,7 @@ bool PMBus_ABIO::setControl(uint8_t val, SystemConfig item)
         }
         else if (val != 1 && OPERATION_INIT_VAL == 1)
         {
-            Serial.println("Switching from start on to start off");
+            tdlogln("Switching from start on to start off");
             txbuffer[1] = hibyte;
             lobyte &= !(0x06);
             txbuffer[0] = lobyte || 0x00;
@@ -592,7 +554,7 @@ bool PMBus_ABIO::setControl(uint8_t val, SystemConfig item)
         }
         else 
         {
-            Serial.println("Control is already whatever");
+            tdlogln("Control is already whatever");
             return true;
         }
     }
@@ -600,7 +562,7 @@ bool PMBus_ABIO::setControl(uint8_t val, SystemConfig item)
     {
         if (val == 1 && PM_CTRL_VAL == 0)
         {
-            Serial.println("Switching from analog to digital");
+            tdlogln("Switching from analog to digital");
             txbuffer[1] = hibyte;
             lobyte &= ~(SYSTEM_CONFIG_PM_CTRL_MASK << SYSTEM_CONFIG_PM_CTRL);
             txbuffer[0] = lobyte || 0x01;
@@ -612,7 +574,7 @@ bool PMBus_ABIO::setControl(uint8_t val, SystemConfig item)
         }
         else if (val == 0 && PM_CTRL_VAL == 1)
         {
-            Serial.println("Switching from digital to analog");
+            tdlogln("Switching from digital to analog");
             txbuffer[1] = hibyte;
             txbuffer[0] = lobyte || 0x00;
             dprintf("Lobyte is now %x\n", txbuffer[1]);
@@ -622,7 +584,7 @@ bool PMBus_ABIO::setControl(uint8_t val, SystemConfig item)
         }
         else 
         {
-            Serial.println("Control is already whatever");
+            tdlogln("Control is already whatever");
             return true;
         }
     }
@@ -630,7 +592,7 @@ bool PMBus_ABIO::setControl(uint8_t val, SystemConfig item)
     {
         if (val == 1)
         {
-            Serial.println("Disabling EEP writes");
+            tdlogln("Disabling EEP writes");
             txbuffer[0] = lobyte;
             uint8_t temp = SYSTEM_CONFIG_EEP_OFF_MASK << SYSTEM_CONFIG_EEP_OFF;
             dprintf("0x%02x\n", temp);
@@ -645,17 +607,17 @@ bool PMBus_ABIO::setControl(uint8_t val, SystemConfig item)
             temp = temp || tempos;
             dprintf("0x%02x\n", temp);
             txbuffer[1] = (hibyte & ~(SYSTEM_CONFIG_EEP_OFF_MASK << SYSTEM_CONFIG_EEP_OFF)) | (1 << SYSTEM_CONFIG_EEP_OFF);
-            dprintf("Hibyte is now 0x%02x\n", hibyte);
+            tdlogln("Hibyte is now 0x%02x", hibyte);
             //bytesWritten = writeTwoBytes(CMD_CODE_SYSTEM_CONFIG, txbuffer);
             //dprintf("Wrote %d bytes.\n", bytesWritten);
             return true;
         }
         else if (val == 0)
         {
-            Serial.println("Enabling EEP writes");
+            tdlogln("Enabling EEP writes");
             txbuffer[0] = lobyte;
             txbuffer[1] = (hibyte & ~(SYSTEM_CONFIG_EEP_OFF_MASK << SYSTEM_CONFIG_EEP_OFF)) | (0 << SYSTEM_CONFIG_EEP_OFF);
-            dprintf("Hibyte is now 0x%02x\n", hibyte);
+            tdlogln("Hibyte is now 0x%02x", hibyte);
             //bytesWritten = writeTwoBytes(CMD_CODE_SYSTEM_CONFIG, txbuffer);
             //dprintf("Wrote %d bytes.\n", bytesWritten);
             return true;
@@ -668,17 +630,17 @@ bool PMBus_ABIO::setControl(uint8_t val, SystemConfig item)
 bool PMBus_ABIO::readManufData(mfr_data *mfrdata)
 {
     // ID, Model, Revision, Location, Date, Serial
-    Serial.println(F("Reading Manu Data"));
+    tdlogln("Reading Manu Data");
     int sizeofthing = CMD_LENGTH_MFR_ID;
 
     if (!readWithCommand(CMD_CODE_MFR_ID, CMD_LENGTH_MFR_ID))
     {
-        Serial.println(F("ERROR"));
+        tdlogln("ERROR");
         return false;
     }
     #ifdef RPB_1600_DEBUG
         Serial.print(F("Sizeofthing: "));
-        Serial.println(sizeofthing);
+        tdlogln(sizeofthing);
         Serial.println(F("ID Chars: "));
     #endif
 
@@ -702,7 +664,7 @@ bool PMBus_ABIO::readManufData(mfr_data *mfrdata)
     }
 #ifdef RPB_1600_DEBUG
     Serial.print(F("Sizeofthing: "));
-    Serial.println(sizeofthing);
+    tdlogln(sizeofthing);
     Serial.println(F("ID Chars: "));
 #endif
 
@@ -726,7 +688,7 @@ bool PMBus_ABIO::readManufData(mfr_data *mfrdata)
     }
 #ifdef RPB_1600_DEBUG
     Serial.print(F("Sizeofthing: "));
-    Serial.println(sizeofthing);
+    tdlogln(sizeofthing);
     Serial.println(F("ID Chars: "));
 #endif
 
@@ -750,7 +712,7 @@ bool PMBus_ABIO::readManufData(mfr_data *mfrdata)
     }
 #ifdef RPB_1600_DEBUG
     Serial.print(F("Sizeofthing: "));
-    Serial.println(sizeofthing);
+    tdlogln(sizeofthing);
     Serial.println(F("ID Chars: "));
 #endif
 
@@ -774,7 +736,7 @@ bool PMBus_ABIO::readManufData(mfr_data *mfrdata)
     }
 #ifdef RPB_1600_DEBUG
     Serial.print(F("Sizeofthing: "));
-    Serial.println(sizeofthing);
+    tdlogln(sizeofthing);
     Serial.println(F("ID Chars: "));
 #endif
 
@@ -798,7 +760,7 @@ bool PMBus_ABIO::readManufData(mfr_data *mfrdata)
     }
 #ifdef RPB_1600_DEBUG
     Serial.print(F("Sizeofthing: "));
-    Serial.println(sizeofthing);
+    tdlogln(sizeofthing);
     Serial.println(F("ID Chars: "));
 #endif
 
@@ -809,7 +771,7 @@ bool PMBus_ABIO::readManufData(mfr_data *mfrdata)
         Serial.print(rxbuffer->buffer[i]);
         Serial.print("  Char: ");
         Serial.print((char)rxbuffer->buffer[i]);
-        Serial.println(" ");
+        tdlogln(" ");
 #endif
         mfrdata->serial[i] = rxbuffer->buffer[i];
     }
@@ -887,7 +849,7 @@ float PMBus_ABIO::readOutputCurrent()
 {
     if (!readWithCommand(CMD_CODE_READ_IOUT, CMD_LENGTH_READ_IOUT))
     {
-        Serial.println("Error reading current");
+        tdlogln("Error reading current");
         return -1.0;
     }
 
@@ -943,22 +905,22 @@ uint16_t PMBus_ABIO::parseLinearData(void)
     }
 #ifdef RPB_1600_DEBUG
     Serial.print(F("<RPB-1600 DEBUG> Raw Data: 0x"));
-    Serial.println(rawData, HEX);
+    tdlogln(rawData, HEX);
 
     Serial.print(F("<RPB-1600 DEBUG> Raw N: 0x"));
-    Serial.println(rawN, HEX);
+    tdlogln(rawN, HEX);
 
     Serial.print(F("<RPB-1600 DEBUG> N: "));
-    Serial.println(N);
+    tdlogln(N);
 
     Serial.print(F("<RPB-1600 DEBUG> Raw Mantissa : 0x"));
-    Serial.println(rawMantissa, HEX);
+    tdlogln(rawMantissa, HEX);
 
     Serial.print(F("<RPB-1600 DEBUG> Mantissa: "));
-    Serial.println(mantissa);
+    tdlogln(mantissa);
 
     Serial.print(F("<RPB-1600 DEBUG> Result: "));
-    Serial.println(result);
+    tdlogln(result);
 
 #endif
 
@@ -974,7 +936,7 @@ float PMBus_ABIO::parseLinearVoltage(int8_t N)
 
 #ifdef RPB_1600_DEBUG
     Serial.print(F("<RPB-1600 DEBUG> Parsing linear voltage w/N: "));
-    Serial.println(N);
+    tdlogln(N);
     NL
 #endif
 
@@ -992,13 +954,15 @@ float PMBus_ABIO::parseLinearVoltage(int8_t N)
 
 #ifdef RPB_1600_DEBUG
     Serial.print(F("<RPB-1600 DEBUG> Linear voltage result: "));
-    Serial.println(result);
+    tdlogln(result);
     NL
 #endif
 
     return result;
 }
+
 #ifdef USECHARGER
+// Deprecated and unusable
 void PMBus_ABIO::parseCurveConfig(curve_config *config)
 {
     // Bits 0 & 1 of low byte
@@ -1030,7 +994,18 @@ void PMBus_ABIO::parseChargeStatus(charge_status *status)
     status->timeout_flag_cv_mode = (my_rx_buffer[1] && 0x40);            // Bit 6
     status->timeout_flag_float_mode = (my_rx_buffer[1] && 0x80);         // Bit 7
 }
+
+bool PMBus_ABIO::returnChargeConfig(curve_config *config)
+{
+    //Stub until this functionality is needed
+    //dprintf("CCon size: %d, &CCon size %d", sizeof(CConfig), sizeof(&CConfig));
+    memcpy(&CConfig, &config, sizeof(&CConfig));
+    return true;
+}
+
+
 #endif
+
 // Slightly modified version of this https://www.codeproject.com/Tips/1079637/Twos-Complement-for-Unusual-Integer-Sizes
 int16_t PMBus_ABIO::UpscaleTwosComplement(int16_t value, size_t length)
 {
@@ -1054,13 +1029,13 @@ int16_t PMBus_ABIO::UpscaleTwosComplement(int16_t value, size_t length)
 
 bool PMBus_ABIO::clearLocalBuffer(buffer_data* RXBUFFER)
 {
-  Serial.println("Clearing buffer for new data");
+  tdlogln("Clearing buffer for new data");
   for (int i = 0; i < MAX_RECEIVE_BYTES; i++)
   {
     RXBUFFER->buffer[i] = 0;
   }
 
-  Serial.println("Cleared");
+  tdlogln("Cleared");
   RXBUFFER->bufferLength = 0;
   
   return true;
@@ -1072,21 +1047,21 @@ void PMBus_ABIO::printBinary(buffer_data *value)
   uint8_t index = 0;
   do
   {
-    Serial.printf("Current index: %d\n", index);
-      Serial.printf("Raw Value: %d\n", value->buffer[index]);
+    tdlogln("Current index: %d\n", index);
+      tdlogln("Raw Value: %d\n", value->buffer[index]);
       Serial.print("Bits: ");
       for (int i = 7; i >= 0; i--) {
         Serial.print((value->buffer[index] >> i) & 1);
         if (i != 0) Serial.print(' ');
       }
-      Serial.println();
+      tdlogln("");
 
       Serial.print("      ");
       for (int i = 7; i >= 0; i--) {
         Serial.print(i);
         if (i != 0) Serial.print(' ');
       }
-      Serial.println();
+      tdlogln("");
 
   }
   while (++index < value->bufferLength);
@@ -1106,7 +1081,7 @@ void PMBus_ABIO::clearRXBuffer(void)
     }
     
     rxbuffer->bufferLength = 0;
-    Serial.println("Reset buffer length");
+    tdlogln("Reset buffer length");
 #ifdef RPB_1600_DEBUG
     Serial.print("<RPB-1600 DEBUG> RX Buffer Cleared!\n");
 #endif
@@ -1120,12 +1095,12 @@ bool PMBus_ABIO::readFromWrapper(uint8_t len)
 
     if (!i2c_dev->read(ptr, len))
     {
-        Serial.println("ERROR READING, FLUSHING BUFFER");
+        tdlogln("ERROR READING, FLUSHING BUFFER");
         clearRXBuffer();
         return false;
     }
 
-    Serial.println("Read in data");
+    tdlogln("Read in data");
 
     rxbuffer->bufferLength = len;
 
@@ -1205,7 +1180,7 @@ uint8_t PMBus_ABIO::returnCapability(capability* data)
 
 bool PMBus_ABIO::parse_status_word(buffer_data *status_bytes, PMBusStatus *status) 
 {
-    Serial.println("entering");
+    tdlogln("entering");
 
     uint16_t word = rxbuffer->buffer[0] | (rxbuffer->buffer[1] << 8);
 
@@ -1236,14 +1211,14 @@ bool PMBus_ABIO::parse_status_word(buffer_data *status_bytes, PMBusStatus *statu
 
 bool PMBus_ABIO::pullStatus()
 {
-    Serial.println("Getting status bytes...");
+    tdlogln("Getting status bytes...");
 
     if (!readWithCommand(CMD_CODE_STATUS_WORD, CMD_LENGTH_STATUS_WORD))
     {
         return false;
     }
 
-    Serial.println("Read in status command");
+    tdlogln("Read in status command");
 
     if (!parse_status_word(rxbuffer, internalStatus))
         return false;
@@ -1302,25 +1277,25 @@ bool PMBus_ABIO::runOperation(operationByte* ops)
     ops->onOff = (tempOpBuffer >> OPERATION_ON_OFF) & OPERATION_ON_OFF_MASK;
 
     dprintf("On_Off is %d\n", ops->onOff);
-    if (ops->onOff == 1)             Serial.println(" PSU is ON");
-    else if (!(ops->onOff))          Serial.println(" PSU is OFF");
-    else                                    Serial.println(" On/off has an invalid value");
+    if (ops->onOff == 1)             tdlogln(" PSU is ON");
+    else if (!(ops->onOff))          tdlogln(" PSU is OFF");
+    else                                    tdlogln(" On/off has an invalid value");
     
     dprintf("Off_Type is %d\n", ops->offType);
-    if (ops->offType == 1)           Serial.println(" PSU immediately turns off");
-    else if (!(ops->offType))        Serial.println(" PSU soft turns off");
-    else                                    Serial.println(" Off type has an invalid value");
+    if (ops->offType == 1)           tdlogln(" PSU immediately turns off");
+    else if (!(ops->offType))        tdlogln(" PSU soft turns off");
+    else                                    tdlogln(" Off type has an invalid value");
 
     dprintf("Margin_Call is %d\n", ops->marginCall);
-    if (ops->marginCall == 0)        Serial.println(" No margin checking");
-    else if (ops->marginCall == 1)   Serial.println(" Checks lower margin/under- conditions");
-    else if (ops->marginCall == 2)   Serial.println(" Checks upper margin/over- conditions");
-    else                                    Serial.println(" Margin has an invalid value");
+    if (ops->marginCall == 0)        tdlogln(" No margin checking");
+    else if (ops->marginCall == 1)   tdlogln(" Checks lower margin/under- conditions");
+    else if (ops->marginCall == 2)   tdlogln(" Checks upper margin/over- conditions");
+    else                                    tdlogln(" Margin has an invalid value");
 
     dprintf("Fault_Action is %d\n", ops->faultAction);
-    if (ops->faultAction == 1)       Serial.println(" Faults are IGNORED if margin called");
-    else if (ops->faultAction == 2)  Serial.println(" Faults are ACTED UPON if margin called");
-    else                                    Serial.println(" Fault action has an invalid value");
+    if (ops->faultAction == 1)       tdlogln(" Faults are IGNORED if margin called");
+    else if (ops->faultAction == 2)  tdlogln(" Faults are ACTED UPON if margin called");
+    else                                    tdlogln(" Fault action has an invalid value");
 
     NL
 
@@ -1376,35 +1351,35 @@ bool PMBus_ABIO::runOperation(OperationFields opfield, uint8_t bitPosition, uint
     Operations->onOff = (tempOpBuffer >> OPERATION_ON_OFF) & OPERATION_ON_OFF_MASK;
 
     dprintf("On_Off is %d\n", Operations->onOff);
-    if (Operations->onOff == 1)             Serial.println(" PSU is ON");
-    else if (!(Operations->onOff))          Serial.println(" PSU is OFF");
-    else                                    Serial.println(" On/off has an invalid value");
+    if (Operations->onOff == 1)             tdlogln(" PSU is ON");
+    else if (!(Operations->onOff))          tdlogln(" PSU is OFF");
+    else                                    tdlogln(" On/off has an invalid value");
     
     dprintf("Off_Type is %d\n", Operations->offType);
-    if (Operations->offType == 1)           Serial.println(" PSU immediately turns off");
-    else if (!(Operations->offType))        Serial.println(" PSU soft turns off");
-    else                                    Serial.println(" Off type has an invalid value");
+    if (Operations->offType == 1)           tdlogln(" PSU immediately turns off");
+    else if (!(Operations->offType))        tdlogln(" PSU soft turns off");
+    else                                    tdlogln(" Off type has an invalid value");
 
     dprintf("Margin_Call is %d\n", Operations->marginCall);
-    if (Operations->marginCall == 0)        Serial.println(" No margin checking");
-    else if (Operations->marginCall == 1)   Serial.println(" Checks lower margin/under- conditions");
-    else if (Operations->marginCall == 2)   Serial.println(" Checks upper margin/over- conditions");
-    else                                    Serial.println(" Margin has an invalid value");
+    if (Operations->marginCall == 0)        tdlogln(" No margin checking");
+    else if (Operations->marginCall == 1)   tdlogln(" Checks lower margin/under- conditions");
+    else if (Operations->marginCall == 2)   tdlogln(" Checks upper margin/over- conditions");
+    else                                    tdlogln(" Margin has an invalid value");
 
     dprintf("Fault_Action is %d\n", Operations->faultAction);
-    if (Operations->faultAction == 1)       Serial.println(" Faults are IGNORED if margin called");
-    else if (Operations->faultAction == 2)  Serial.println(" Faults are ACTED UPON if margin called");
-    else                                    Serial.println(" Fault action has an invalid value");
+    if (Operations->faultAction == 1)       tdlogln(" Faults are IGNORED if margin called");
+    else if (Operations->faultAction == 2)  tdlogln(" Faults are ACTED UPON if margin called");
+    else                                    tdlogln(" Fault action has an invalid value");
 
     NL
 
     switch (opfield) 
     {
         case OF_NONE:
-            Serial.println("No operation change request.");
+            tdlogln("No operation change request.");
             return false;
         case ON_OFF:
-            Serial.println("Turning on or off");
+            tdlogln("Turning on or off");
 
             if (value != 1 || value != 0) 
             {
@@ -1419,7 +1394,7 @@ bool PMBus_ABIO::runOperation(OperationFields opfield, uint8_t bitPosition, uint
                 dprintf("Operation buffer is 0x%02x\n", txBuilder[0]);
                 if(!writeTwoBytes(CMD_CODE_OPERATION, txBuilder , 1))
                 {
-                    Serial.println("Error writing value");
+                    tdlogln("Error writing value");
                     return false;
                 }
             }
@@ -1433,16 +1408,16 @@ bool PMBus_ABIO::runOperation(OperationFields opfield, uint8_t bitPosition, uint
             runOperation(OF_NONE, 0, 0, 0);
             return true;
         case OFF_TYPE:
-            Serial.println("Off type stubbed");
+            tdlogln("Off type stubbed");
             return true;
         case MARGIN_CALL:
-            Serial.println("Margin stubbed");
+            tdlogln("Margin stubbed");
             return true;
         case FAULT_ACTION:
-            Serial.println("Fault type stubbed");
+            tdlogln("Fault type stubbed");
             return true;
         default:
-            Serial.println("Error switch case");
+            tdlogln("Error switch case");
             return false;
     }
     
@@ -1512,15 +1487,15 @@ bool PMBus_ABIO::parseOnOffConfig(OnOffConfigByte *oocb, uint8_t *reg)
 /*// Eventually move this into its own hep-1000-100 derived class
 bool changeOCFaultLimit(float current)
 {
-  Serial.printf("Setting the current limit to %.4f A\n", current);
+  tdlogln("Setting the current limit to %.4f A\n", current);
 
   if (!HAPSU.setOCFaultLimit(current, CMD_N_VALUE_IOUT_OC_FAULT_LIMIT))
   {
-    Serial.println("ERROR WRITING LIMIT");
+    tdlogln("ERROR WRITING LIMIT");
     return false;
   }
 
-  Serial.println("Success")
+  tdlogln("Success")
 
   return true;
 }
@@ -1530,16 +1505,16 @@ bool changeVout(float vout)
 {
   float trim = vout - 100.0;
 
-  Serial.printf("Setting vout to %.2f by writing the trim as %.2f\n", vout, trim);
+  tdlogln("Setting vout to %.2f by writing the trim as %.2f\n", vout, trim);
 
   if (!HAPSU.writeVoutTrim(trim, CMD_N_VALUE_VOUT_TRIM))
   {
-    Serial.println("ERROR Writing vout trim");
+    tdlogln("ERROR Writing vout trim");
 
     return false;
   }
 
-  Serial.println("Success");
+  tdlogln("Success");
 
   return true;
 }*/

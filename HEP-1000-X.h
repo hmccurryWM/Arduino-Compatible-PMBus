@@ -97,8 +97,8 @@ public:
     bool getCurveCV(const float *cvcurve);
     bool getCurveFV(const float *fvcurve);
     bool getCurveTC(const float *tccurve);
-    bool setCurveConfig(const uint16_t *reg);
-    bool getCurveconfig(const uint16_t *reg);
+    bool setCurveConfig(curve_config *ccfg);
+    bool getCurveConfig();
     bool setCurveCCTimeout(const uint16_t *cctimeout);
     bool setCurveCVTimeout(const uint16_t *cvtimeout);
     bool setCurveFloatTimeout(const uint16_t *floattimeout);
@@ -116,6 +116,16 @@ public:
     bool getMfrData(mfr_data* data);
     bool setVout(const float* vout);
     bool getSetVoutCommand(const float* vout);
+
+#define USECHARGER
+#ifdef USECHARGER
+    /**
+     * @brief Query charger for curve parameter bytes, populate a "curve_parameters" struct
+     * @return true on successful read, false otherwise
+     */
+    //bool getCurveParams(curve_parameters *params);
+    bool EnableCharger(bool enable);
+#endif
 
 private:
     uint8_t voltageRating;
